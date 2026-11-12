@@ -1,0 +1,123 @@
+# Odoo web tier — several identical replicas spread across nodes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odoo
+  namespace: odoo
+spec:
+  # 2 is safe for this cluster size. The lab also ran 4 (2 per worker) — it worked,
+  # but left almost no CPU headroom (see docs/lessons-learned.md, "OutOfcpu").
+  replicas: 2
+  selector:
+    matchLabels:
+      app: odoo
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0   # never go below the desired replica count during updates
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: odoo
+    spec:
+      enableServiceLinks: false
+      # Spread replicas evenly over nodes: one node failure must not take all of them
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway   # soft: still schedule if a node is gone
+          nodeTaintsPolicy: Honor             # ignore the tainted control-plane node
+          labelSelector:
+            matchLabels:
+              app: odoo
+      # Allow the Spot node on equal terms (otherwise its soft taint pushes all to worker-1)
+      tolerations:
+        - key: lifecycle
+          operator: Equal
+          value: spot
+          effect: PreferNoSchedule
+      containers:
+        - name: odoo
+          image: odoo:19.0
+          # --db-filter + --no-database-list: serve only "odoo", hide the DB manager
+          # --proxy-mode: trust X-Forwarded-* headers set by Traefik (HTTPS, client IP)
+          args: ["odoo", "-d", "odoo", "--db-filter=^odoo$", "--no-database-list", "--proxy-mode"]
+          env:
+            - name: HOST
+              value: postgres
+            - name: USER
+              value: odoo
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-db
+                  key: password
+          ports:
+            - name: http
+              containerPort: 8069
+          # startup: Odoo boots slowly; other probes are disabled until this passes (up to 2.5 min)
+          startupProbe:
+            httpGet:
+              path: /web/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          # readiness: 2 failures (6 s) -> removed from the Service, NOT restarted
+          readinessProbe:
+            httpGet:
+              path: /web/health
+              port: http
+            periodSeconds: 3
+            failureThreshold: 2
+          # liveness: 3 failures (30 s) -> container restarted
+          livenessProbe:
+            httpGet:
+              path: /web/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1536Mi
+          volumeMounts:
+            - name: filestore
+              mountPath: /var/lib/odoo
+      volumes:
+        - name: filestore
+          persistentVolumeClaim:
+            claimName: odoo-filestore
+---
+# NodePort: reachable on <any node IP>:30069 inside the VNet (used for an SSH tunnel
+# before publishing). Port 30069 is NOT opened in the Azure NSG.
+apiVersion: v1
+kind: Service
+metadata:
+  name: odoo
+  namespace: odoo
+spec:
+  type: NodePort
+  selector:
+    app: odoo
+  ports:
+    - name: http
+      port: 8069
+      targetPort: http
+      nodePort: 30069
+---
+# Planned disruptions (kubectl drain) must keep at least one replica running.
+# Does not protect against direct `kubectl delete pod` or node crashes.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: odoo
+  namespace: odoo
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: odoo

@@ -1,0 +1,26 @@
+# Traffic generator: 5 requests/s to the podinfo Service, prints which pod answered
+# or FAIL. Pinned to worker-1 so it survives experiments with worker-2.
+#   kubectl logs -f loadgen
+apiVersion: v1
+kind: Pod
+metadata:
+  name: loadgen
+spec:
+  nodeName: worker-1
+  containers:
+    - name: loadgen
+      image: busybox:1.36
+      command: ["sh", "-c"]
+      args:
+        - |
+          err=0
+          while true; do
+            H=$(wget -q -T 1 -O- http://podinfo:9898/ 2>/dev/null | grep -o '"hostname": *"[^"]*"' | cut -d'"' -f4)
+            if [ -n "$H" ]; then
+              echo "$(date +%T) OK   $H"
+            else
+              err=$((err+1))
+              echo "$(date +%T) FAIL ------------------------- errors=$err"
+            fi
+            sleep 0.2
+          done

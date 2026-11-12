@@ -1,0 +1,46 @@
+# Public HTTPS entry point: Traefik + cert-manager (Let's Encrypt).
+# REPLACE odoo.example.com with your domain (A record -> master-1 public IP):
+#   sed -i 's/odoo.example.com/your.domain.tld/g' 50-ingress.yaml
+#
+# Start with letsencrypt-staging, switch to letsencrypt-prod once it works
+# (then delete Secret odoo-tls so a new certificate is issued).
+
+# Redirect http:// -> https:// (301). Requests that are already HTTPS pass through.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: odoo
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: odoo
+  namespace: odoo
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # <namespace>-<middleware name>@kubernetescrd
+    # Certificate renewals are unaffected: cert-manager's temporary solver Ingress
+    # has a longer path rule (/.well-known/acme-challenge/...) and wins in Traefik.
+    traefik.ingress.kubernetes.io/router.middlewares: odoo-redirect-https@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - odoo.example.com
+      secretName: odoo-tls
+  rules:
+    - host: odoo.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: odoo
+                port:
+                  name: http

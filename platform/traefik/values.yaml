@@ -1,0 +1,40 @@
+# Helm values for traefik/traefik (chart 42.x, Traefik v3).
+# No cloud load balancer in this lab: Traefik runs on master-1 (the only node
+# with a public IP) and binds the node's ports 80/443 via hostPort.
+
+# Run only on the control-plane node
+nodeSelector:
+  node-role.kubernetes.io/control-plane: ""
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+# Node ports 80/443 -> container ports 8000/8443 (Traefik runs as non-root)
+ports:
+  web:
+    hostPort: 80
+  websecure:
+    hostPort: 443
+
+# Default Service type is LoadBalancer, which would stay <pending> forever
+# without a cloud controller. Traffic arrives via hostPort anyway.
+service:
+  spec:
+    type: ClusterIP
+
+# A hostPort can be bound by only one pod per node: the default surge strategy
+# would deadlock upgrades (new pod can't bind 80 while the old one holds it).
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

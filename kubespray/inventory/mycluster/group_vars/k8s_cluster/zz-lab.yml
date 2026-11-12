@@ -1,0 +1,27 @@
+# Lab overrides on top of Kubespray's sample group_vars.
+# Ansible reads every file in this directory alphabetically; the "zz-" prefix
+# makes this file load last, so its values win.
+
+# ---- Pod network: Calico in VXLAN mode ----
+# Azure only forwards regular TCP/UDP/ICMP between VMs and drops IP-in-IP
+# (protocol 4) and unknown pod IPs. VXLAN wraps pod traffic in UDP/4789.
+kube_network_plugin: calico
+calico_network_backend: vxlan
+calico_vxlan_mode: Always
+calico_ipip_mode: Never
+
+# ---- API access from outside ----
+# Add the master's PUBLIC IP to the API server certificate,
+# otherwise kubectl from your PC fails TLS verification.
+# REPLACE the example address with the IP printed by 01-create-infra.sh.
+supplementary_addresses_in_ssl_keys:
+  - 203.0.113.10
+
+# Save an admin kubeconfig on the control node:
+#   inventory/mycluster/artifacts/admin.conf   (git-ignored — it is a secret!)
+kubeconfig_localhost: true
+
+# ---- Add-ons ----
+helm_enabled: true                     # Helm package manager
+metrics_server_enabled: true           # kubectl top, CPU/RAM in dashboards
+local_path_provisioner_enabled: true   # default StorageClass "local-path" (node-local disks)

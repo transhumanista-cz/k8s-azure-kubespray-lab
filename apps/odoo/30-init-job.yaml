@@ -1,0 +1,56 @@
+# One-off Job: create the "odoo" database and install the base module.
+# Run once, before the Deployment:
+#   kubectl apply -f 30-init-job.yaml
+#   kubectl -n odoo wait --for=condition=complete job/odoo-init --timeout=900s
+#
+# Same pattern for schema changes (installing/upgrading modules) on a multi-replica
+# setup: scale the Deployment to 0, run a Job with `-i <module>` (or `-u <module>`),
+# then scale back. Copy this file, change the name and the -i argument.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: odoo-init
+  namespace: odoo
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: lifecycle
+                    operator: NotIn
+                    values: ["spot"]
+      containers:
+        - name: init
+          image: odoo:19.0
+          args: ["odoo", "-d", "odoo", "-i", "base", "--stop-after-init", "--no-http"]
+          env:
+            # The official image's entrypoint turns these into --db_host/--db_user/--db_password
+            - name: HOST
+              value: postgres
+            - name: USER
+              value: odoo
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-db
+                  key: password
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1536Mi
+          volumeMounts:
+            - name: filestore
+              mountPath: /var/lib/odoo
+      volumes:
+        - name: filestore
+          persistentVolumeClaim:
+            claimName: odoo-filestore

@@ -1,0 +1,7 @@
+# worker-2 is an Azure Spot VM — it can be evicted at any moment.
+# Label: lets workloads select or avoid the node (nodeAffinity).
+# Taint: soft "repel" — the scheduler avoids the node while others have room.
+node_labels:
+  lifecycle: spot
+node_taints:
+  - "lifecycle=spot:PreferNoSchedule"

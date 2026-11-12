@@ -1,0 +1,33 @@
+# Shared storage for all Odoo replicas: attachments AND user sessions.
+# Without it a user logged in on replica 1 is logged out when the next request
+# lands on replica 2. Needs ReadWriteMany -> NFS (cloud equivalent: Azure Files / EFS).
+#
+# NFS server: master-1:/srv/nfs/odoo (see docs/04-storage.md). Static provisioning:
+# we create the PV by hand and bind the PVC to it explicitly.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: odoo-filestore
+spec:
+  capacity:
+    storage: 10Gi                     # informational for NFS — not enforced
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain   # keep user files if the PVC is deleted
+  storageClassName: ""                # empty = do NOT use the default class (local-path)
+  mountOptions: ["nfsvers=4.2", "hard"]   # hard: block and wait if NFS is down, never corrupt
+  nfs:
+    server: 10.10.1.10
+    path: /srv/nfs/odoo
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: odoo-filestore
+  namespace: odoo
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  volumeName: odoo-filestore
+  resources:
+    requests:
+      storage: 10Gi

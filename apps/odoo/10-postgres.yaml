@@ -1,0 +1,95 @@
+# PostgreSQL for Odoo — a single instance on a node-local disk.
+# This is a deliberate single point of failure (application-level HA only).
+#
+# The password lives in a Secret that is NOT stored in git. Create it first:
+#   kubectl -n odoo create secret generic odoo-db \
+#     --from-literal=password="$(openssl rand -base64 18)"
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: odoo
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: pg
+---
+# StatefulSet: stable pod name (postgres-0) and a disk bound to that name.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: odoo
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      # Don't inject legacy service env vars (POSTGRES_PORT=tcp://...) — they can
+      # clash with the image's own settings when a Service shares the app's name.
+      enableServiceLinks: false
+      # local-path disks never move between nodes: keep the DB on a regular (non-Spot) node
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: lifecycle
+                    operator: NotIn
+                    values: ["spot"]
+      containers:
+        - name: postgres
+          image: postgres:17
+          env:
+            - name: POSTGRES_USER
+              value: odoo
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-db
+                  key: password
+            - name: POSTGRES_DB
+              value: postgres
+            # Subdirectory: initdb refuses non-empty dirs (e.g. lost+found on some disks)
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: pg
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "odoo", "-d", "postgres"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "odoo", "-d", "postgres"]
+            periodSeconds: 10
+            failureThreshold: 6   # be patient with a database — a restart mid-operation is worse
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi
